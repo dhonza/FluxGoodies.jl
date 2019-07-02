@@ -1,5 +1,6 @@
 module FluxGoodies
 
-greet() = print("Hello World!")
+include("training/training.jl")
 
+include("architectures/mlp.jl")
 end # module
