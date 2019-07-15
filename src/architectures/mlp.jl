@@ -6,16 +6,43 @@ end
   
 @Flux.treelike MLP
   
-function MLP(ls::Vector{Int}; dropout = 0.0, batchnorm = false)
-    layers = []
-    for i in 2:length(ls) - 1
-        push!(layers, Dense(ls[i - 1], ls[i], relu))
-        batchnorm && push!(layers, BatchNorm(ls[i]))
-        dropout > 0.0 && push!(layers, Dropout(dropout))
+function MLP(inopts::Int, layeropts::Union{Int,Pair{Int}}...; activation = relu, outactivation = nothing)
+    outactivation = outactivation == nothing ? activation : outactivation
+    
+    function extract_layeropts(l, i)
+        act = i < length(layeropts) ? activation : outactivation
+        drop = 0.0
+        bn = false
+        if l isa Pair{Int}
+            opts = last(l)
+            opts = opts isa Union{AbstractArray,Tuple} ? opts : [opts]
+            for o in opts
+                o = o isa Symbol ? o => true : o
+                if first(o) == :act
+                    act = last(o)
+                elseif first(o) == :dropout
+                    drop = last(o)
+                elseif first(o) == :batchnorm
+                    bn = true
+                else
+                    error("unknown layer option: $(first(o))")
+                end
+            end
+        end
+        (size = first(l), activation = act, batchnorm = bn, dropout = drop)
     end
-  #     push!(layers, Dense(ls[end-1], ls[end], σ))
-    push!(layers, Dense(ls[end - 1], ls[end]))
+    
+    layers = []
+    nprev = inopts
+    for (i, l) in enumerate(layeropts)
+        opts = extract_layeropts(l, i)
+        push!(layers, Dense(nprev, opts.size, opts.activation))
+        opts.batchnorm && push!(layers, BatchNorm(opts.size))
+        opts.dropout > 0.0 && push!(layers, Dropout(opts.dropout))
+        nprev = first(l)
+    end
     MLP(Chain(layers...))
 end
+
                               
 (m::MLP)(x::AbstractArray) = m.layers(x)
