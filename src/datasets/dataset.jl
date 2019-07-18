@@ -1,5 +1,6 @@
 using CSV
 using DataFrames
+using DataStructures: OrderedDict
 
 import Base: show
 
@@ -12,18 +13,25 @@ struct RawDataset
     df::DataFrame
     targets::Vector{Symbol}
     desc::AbstractString
+    partitions::OrderedDict{Symbol,AbstractVector{Int}}
 end
+
+RawDataset(df, targets, desc) = RawDataset(df, targets, desc, OrderedDict())
+RawDataset(df, targets, desc, ::Nothing) = RawDataset(df, targets, desc)
 
 inputs(d::RawDataset) = view(d.df, setdiff(names(d.df), d.targets))
 targets(d::RawDataset) = view(d.df, d.targets)
+partition(d::RawDataset, p::Symbol) = RawDataset(view(d.df, d.partitions[p], :), d.targets, d.desc)
 
 function show(io::IO, mime::MIME"text/html", x::RawDataset)
     targets = join(x.targets, ", ")
-    write(io, "<b>Target attributes: $targets</b>")
+    partitions = join(["$(String(k)) ($(length(v)) samples)" for (k, v) in x.partitions], ", ")
+    write(io, "<b>Target attributes: $targets</b><br/>")
+    write(io, "<b>Partitions: $partitions</b><br/>")
     show(io, mime, x.df)
 end
 
-function _load_UCI(uciname, cols, targets; cvsopts...)
+function _load_UCI(uciname, cols, targets, partitions::Union{AbstractDict,Nothing} = nothing; cvsopts...)
     dir = deps(uciname)
     mkpath(dir)
     for fname in ["$uciname.data", "$uciname.names"]
@@ -33,14 +41,14 @@ function _load_UCI(uciname, cols, targets; cvsopts...)
     end
     df = CSV.read(joinpath(dir, "$uciname.data"); header = cols, copycols = true, cvsopts...)
     desc = read(joinpath(dir, "$uciname.names"), String)
-    RawDataset(df, targets, desc)
+    RawDataset(df, targets, desc, partitions)
 end
 
 function load_abalone()
     # 3133 training, final 1044 testing
     cols = [:sex, :length, :diameter, :height, :whole_weight, :shucked_weight, :viscera_weight, :shell_weight, :rings]
     targets = [:rings]
-    _load_UCI("abalone", cols, targets)
+    _load_UCI("abalone", cols, targets, OrderedDict(:train => 1:3133, :test => 3134:4177))
 end
 
 function load_ecoli()

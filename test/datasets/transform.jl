@@ -5,17 +5,19 @@ using Random
 function build_trans()
     Random.seed!(0)
     n = 20000
-    df = DataFrame([10 * (randn(n) .- 5), rand(["X", "Y", "Z"], n)], [:A, :B])
+    df = DataFrame([10 * (randn(n) .- 5), rand(["X", "Y", "Z"], n), rand(["M", "N", "O"], n)], [:A, :B, :C])
     trans = ChainColumnTransform([
         ParallelColumnTransform([
                 CopyColumnTransform(Column{Float64}(:A)),
-                OneHotColumnTransform{String}(Column{String}(:B), df.B)
+                NominalToIntTransform(Column{String}(:B), df.B),
+                OneHotColumnTransform(Column{String}(:C), df.C)
                 ]), 
         ParallelColumnTransform([
                 StandardizeColumnTransform(Column{Float64}(:A)),
-                StandardizeColumnTransform(Column{Float64}(:B_X)),
-                StandardizeColumnTransform(Column{Float64}(:B_Y)),
-                StandardizeColumnTransform(Column{Float64}(:B_Z))
+                CopyColumnTransform(Column{Int}(:B)),
+                StandardizeColumnTransform(Column{Float64}(:C_M)),
+                StandardizeColumnTransform(Column{Float64}(:C_N)),
+                StandardizeColumnTransform(Column{Float64}(:C_O))
                 ])
     ])
     trans, df
@@ -28,6 +30,7 @@ end
     df3 = invtransform(trans, df2)
     @test df.A ≈ df3.A
     @test df.B == df3.B
+    @test df.C == df3.C
 end
 
 @testset "dump_transform and load_transform" begin
@@ -49,10 +52,10 @@ end
     end
 end
 
-@testset "ann_transform" begin
+@testset "transform_to_numerical" begin
     @testset "DataFrame to DataFrame" begin
         srcdf = DataFrame([[1,2,3], ["X", "Y", "Z"]], [:A, :B])
-        trans = ann_transform(srcdf)
+        trans = transform_to_numerical(srcdf)
         dstdf = transform(trans, srcdf, DataFrame)
         @test dstdf == DataFrame([[1,2,3], [1, 0, 0], [0, 1, 0], [0, 0, 1]], [:A, :B_X, :B_Y, :B_Z])
         dstdf[1, :A] = 5
@@ -60,16 +63,34 @@ end
         dstdf[2, :B_Y] = 0.0
         invtransform!(trans, srcdf, dstdf)
         @test srcdf == DataFrame([[5,2,3], ["X", "X", "Z"]], [:A, :B])
+
+        srcdf = DataFrame([[1,2,3], ["X", "Y", "Z"]], [:A, :B])
+        trans = transform_to_numerical(srcdf, false)
+        dstdf = transform(trans, srcdf, DataFrame)
+        @test dstdf == DataFrame([[1,2,3], [1,2,3]], [:A, :B])
+        dstdf[1, :A] = 5
+        dstdf[2, :B] = 1
+        invtransform!(trans, srcdf, dstdf)
+        @test srcdf == DataFrame([[5,2,3], ["X", "X", "Z"]], [:A, :B])
     end
 
     @testset "DataFrame to Matrix" begin
         srcdf = DataFrame([[1,2,3], ["X", "Y", "Z"]], [:A, :B])
-        trans = ann_transform(srcdf)
+        trans = transform_to_numerical(srcdf)
         dstdf = transform(trans, srcdf, Matrix{Float64})
         @test dstdf == [1.0 1 0 0; 2 0 1 0; 3 0 0 1]
         dstdf[1, 1] = 5
         dstdf[2, 2] = 1.0
         dstdf[2, 3] = 0.0
+        invtransform!(trans, srcdf, dstdf)
+        @test srcdf == DataFrame([[5,2,3], ["X", "X", "Z"]], [:A, :B])
+
+        srcdf = DataFrame([[1,2,3], ["X", "Y", "Z"]], [:A, :B])
+        trans = transform_to_numerical(srcdf, false)
+        dstdf = transform(trans, srcdf, Matrix{Float64})
+        @test dstdf == [1.0 1.0; 2.0 2.0; 3.0 3.0]
+        dstdf[1, 1] = 5
+        dstdf[2, 2] = 1.0
         invtransform!(trans, srcdf, dstdf)
         @test srcdf == DataFrame([[5,2,3], ["X", "X", "Z"]], [:A, :B])
     end

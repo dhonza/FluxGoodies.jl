@@ -39,34 +39,82 @@ dstcols(t::CopyColumnTransform) = [t.col]
 
 inplace(t::CopyColumnTransform) = true
 
+mutable struct NominalToIntTransform{T} <: ColumnTransform
+    col::Column{T}
+    table::OrderedDict{T,Int} 
+end
+
+function NominalToIntTransform(col::Column{T}, data::AbstractVector{T}) where T
+    unq = sort(unique(data))
+    table = OrderedDict{eltype(data),Int}(v => i for (i, v) in enumerate(unq)) 
+    NominalToIntTransform(col, table)
+end  
+
+function NominalToIntTransform(col::Column)
+    NominalToIntTransform(col, ctype(col)[])
+end
+
+function transform!(t::NominalToIntTransform, src::Tabular, dst::Tabular; opts...)
+    if get(opts, :fit, false)
+        temp = NominalToIntTransform(t.col, view(src, :, 1))
+        merge!(t.table, temp.table)
+    end
+    for i in 1:size(src, 1)
+        dst[i, 1] = t.table[src[i, 1]]
+    end
+end
+
+function invtransform!(t::NominalToIntTransform, src::Tabular, dst::Tabular; opts...)
+    for i in 1:size(src, 1)
+        src[i, 1] = collect(keys(t.table))[convert(Int, dst[i, 1])]
+    end
+end
+
+srccols(t::NominalToIntTransform) = [t.col]
+
+dstcols(t::NominalToIntTransform) = [Column{Int}(name(t.col))]
+
+inplace(t::NominalToIntTransform) = ctype(t.col) == Int
+
+#TODO too much code similar to NominalToIntTransform
 struct OneHotColumnTransform{T} <: ColumnTransform
     col::Column{T}
-    vals::Vector{T}
+    table::OrderedDict{T,Int}
+end
 
-    function OneHotColumnTransform{T}(col::Column{T}, data::AbstractVector{T}) where T
-        new{T}(col, Vector{T}(sort(unique(data))))
-    end
+function OneHotColumnTransform(col::Column{T}, data::AbstractVector{T}) where T
+    unq = sort(unique(data))
+    table = OrderedDict{eltype(data),Int}(v => i for (i, v) in enumerate(unq)) 
+    OneHotColumnTransform(col, table)
+end  
+
+function OneHotColumnTransform(col::Column)
+    OneHotColumnTransform(col, ctype(col)[])
 end
 
 srccols(t::OneHotColumnTransform) = [t.col]
 
-dstcols(t::OneHotColumnTransform) = [Column{Int}(String(t.col.name) * "_" * String(v) |> Symbol) for v in t.vals]
+dstcols(t::OneHotColumnTransform) = [Column{Int}(String(name(t.col)) * "_" * String(k) |> Symbol) for (k, v) in t.table]
 
 # TODO remove S and D types, src and dst must be Matrices/Tables i.e., 2D
 function transform!(t::OneHotColumnTransform, src::Tabular, dst::Tabular; opts...)
-    d = Dict(v => i for (i, v) in enumerate(t.vals))
+    if get(opts, :fit, false)
+        temp = NominalToIntTransform(t.col, view(src, :, 1))
+        merge!(t.table, temp.table)
+    end
     for i in 1:size(dst, 2)
         view(dst, :, i) .= 0
     end
     for i in 1:size(src, 1)
-        j = d[src[i, 1]]
+        j = t.table[src[i, 1]]
         dst[i, j] = 1
     end
 end
 
 function invtransform!(t::OneHotColumnTransform, src::Tabular, dst::Tabular; opts...)
     for i in 1:size(src, 1)
-        view(src, i, 1) .= t.vals[argmax(Vector(dst[i, :]))]
+        j = argmax(Vector(dst[i, :]))
+        src[i, 1] = collect(keys(t.table))[j]
     end
 end
 
@@ -96,7 +144,7 @@ inplace(t::StandardizeColumnTransform) = true
 
 function transform!(t::StandardizeColumnTransform, src::Tabular, dst::Tabular; opts...)
     if get(opts, :fit, false)
-        temp = StandardizeColumnTransform(t.col, src[:, 1])
+        temp = StandardizeColumnTransform(t.col, view(src, :, 1))
         t.μ, t.σ = temp.μ, temp.σ
     end
     (t.μ == nothing || t.σ == nothing) && error("StandardizeColumnTransform not fit!")
@@ -175,22 +223,43 @@ function allocate(tp::Type{Matrix{T}}, t::ColumnTransform, len::Int, fcols = dst
 end
 
 function allocate(::Type{<:AbstractDataFrame}, t::ColumnTransform, len::Int, fcols = dstcols) where T
-#     tp(undef, length(dstcols(t)), len)
     cols = fcols(t)
     DataFrame(ctype.(cols), name.(cols), len)
 end
 
-function ann_transform(src::AbstractDataFrame)
+function nominal(src::AbstractDataFrame, maxunique::Union{Int,Nothing}=nothing)
+    cols = columns(src)
+    ret = OrderedSet{Column}()
+    for col in cols
+        n, t = name(col), ctype(col)
+        if t <: AbstractString
+            push!(ret, col) 
+        elseif t <: Real
+            if maxunique != nothing && length(unique(src[n])) <= maxunique
+                push!(ret, col)
+            end
+        else
+            error("unknown type: $(t)")
+        end
+    end
+    ret
+end
+
+function transform_to_numerical(src::AbstractDataFrame, onehot=true, nominal=nothing)
+    if nominal == nothing
+        nominal = FluxGoodies.nominal(src)
+    end
     cols = columns(src)
     transforms = ColumnTransform[]
     for col in cols
-        if ctype(col) <: Real
-            push!(transforms, CopyColumnTransform(col))
-        elseif ctype(col) <: AbstractString
-            t = OneHotColumnTransform{ctype(col)}(col, src[name(col)])
-            push!(transforms, t)
+        if col ∈ nominal
+            if onehot
+                push!(transforms, OneHotColumnTransform(col, src[name(col)]))
+            else
+                push!(transforms, NominalToIntTransform(col, src[name(col)]))
+            end
         else
-            error("unknown type: $(ctype(col))")
+            push!(transforms, CopyColumnTransform(col))
         end
     end
     ParallelColumnTransform(transforms)
@@ -224,8 +293,10 @@ end
 # ------ SERIALIZATION
 JSON.lower(t::Column{T}) where T = OrderedDict("type" => "Column{$T}", "name" => t.name)
 JSON.lower(t::CopyColumnTransform) = OrderedDict("type" => "CopyColumnTransform", "col" => t.col)
-JSON.lower(t::OneHotColumnTransform{T}) where T = OrderedDict("type" => "OneHotColumnTransform{$T}", 
-        "col" => t.col, "vals" => t.vals)
+JSON.lower(t::NominalToIntTransform) where T = OrderedDict("type" => "NominalToIntTransform", 
+        "col" => t.col, "table" => t.table)
+JSON.lower(t::OneHotColumnTransform) where T = OrderedDict("type" => "OneHotColumnTransform", 
+        "col" => t.col, "table" => t.table)
 JSON.lower(t::StandardizeColumnTransform) = OrderedDict("type" => "StandardizeColumnTransform", 
         "col" => t.col, "mu" => t.μ, "sigma" => t.σ)
 JSON.lower(t::ChainColumnTransform) = OrderedDict("type" => "ChainColumnTransform", "transforms" => t.transforms)
@@ -237,8 +308,15 @@ end
 
 deserializetype(t::Type{Column{T}}, params::OrderedDict) where T = t(Symbol(params["name"]))
 
-deserializetype(t::Type{OneHotColumnTransform{T}}, params::OrderedDict) where T =  
-    t(deserialize(params["col"]), String.(params["vals"]))
+function deserializetype(t::Type{NominalToIntTransform}, params::OrderedDict) 
+    col = deserialize(params["col"])
+    t(col, OrderedDict{ctype(col),Int}(params["table"]))
+end
+
+function deserializetype(t::Type{OneHotColumnTransform}, params::OrderedDict) 
+    col = deserialize(params["col"])
+    t(col, OrderedDict{ctype(col),Int}(params["table"]))
+end
 
 deserializetype(t::Type{ParallelColumnTransform}, params::OrderedDict) = t(deserialize.(values(params["transforms"])))
 
