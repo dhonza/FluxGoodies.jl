@@ -1,7 +1,55 @@
 using DataFrames
 using FluxGoodies
+using Random
 
-@testset "ANN Transform" begin
+function build_trans()
+    Random.seed!(0)
+    n = 20000
+    df = DataFrame([10 * (randn(n) .- 5), rand(["X", "Y", "Z"], n)], [:A, :B])
+    trans = ChainColumnTransform([
+        ParallelColumnTransform([
+                CopyColumnTransform(Column{Float64}(:A)),
+                OneHotColumnTransform{String}(Column{String}(:B), df.B)
+                ]), 
+        ParallelColumnTransform([
+                StandardizeColumnTransform(Column{Float64}(:A)),
+                StandardizeColumnTransform(Column{Float64}(:B_X)),
+                StandardizeColumnTransform(Column{Float64}(:B_Y)),
+                StandardizeColumnTransform(Column{Float64}(:B_Z))
+                ])
+    ])
+    trans, df
+end
+
+@testset "transform and invtransform" begin
+    trans, df = build_trans()
+    fit!(trans, df)
+    df2 = transform(trans, df)
+    df3 = invtransform(trans, df2)
+    @test df.A ≈ df3.A
+    @test df.B == df3.B
+end
+
+@testset "dump_transform and load_transform" begin
+    trans, df = build_trans()
+    path, io = mktemp()
+    path2, io2 = mktemp()
+    try
+        dump_transform(io, trans)
+        flush(io)
+        trans2 = load_transform(path)
+        dump_transform(io2, trans2)
+        flush(io2)
+        @test read(path, String) == read(path2, String)
+    finally
+        close(io)
+        close(io2)
+        rm(path)
+        rm(path2)
+    end
+end
+
+@testset "ann_transform" begin
     @testset "DataFrame to DataFrame" begin
         srcdf = DataFrame([[1,2,3], ["X", "Y", "Z"]], [:A, :B])
         trans = ann_transform(srcdf)

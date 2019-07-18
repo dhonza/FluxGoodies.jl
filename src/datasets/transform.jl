@@ -72,8 +72,8 @@ end
 
 mutable struct StandardizeColumnTransform{T <: Real} <: ColumnTransform
     col::Column{T}
-    μ::Union{T, Nothing}
-    σ::Union{T, Nothing}
+    μ::Union{T,Nothing}
+    σ::Union{T,Nothing}
 end
 
 function StandardizeColumnTransform(col::Column{T}) where T <: Real
@@ -153,7 +153,7 @@ inplace(t::ChainColumnTransform) = all(inplace.(t.transforms))
 
 function transform!(t::ChainColumnTransform, src::Tabular, dst::Tabular; opts...)
     #TODO no allocation for inplace = false transforms
-    for trans in t.transforms[1:end-1]
+    for trans in t.transforms[1:end - 1]
         src = transform(trans, src; opts...)
     end
     transform!(t.transforms[end], src, dst; opts...)
@@ -170,11 +170,11 @@ end
 
 # ------ COMMON
 
-function allocate(tp::Type{Matrix{T}}, t::ColumnTransform, len::Int, fcols=dstcols) where T
+function allocate(tp::Type{Matrix{T}}, t::ColumnTransform, len::Int, fcols = dstcols) where T
     tp(undef, length(fcols(t)), len)' # generate transposed matrix
 end
 
-function allocate(::Type{<:AbstractDataFrame}, t::ColumnTransform, len::Int, fcols=dstcols) where T
+function allocate(::Type{<:AbstractDataFrame}, t::ColumnTransform, len::Int, fcols = dstcols) where T
 #     tp(undef, length(dstcols(t)), len)
     cols = fcols(t)
     DataFrame(ctype.(cols), name.(cols), len)
@@ -218,7 +218,7 @@ invtransform(t::ColumnTransform, dst::Tabular; opts...) = invtransform(t, dst, t
 
 function fit!(t::ColumnTransform, src::Tabular)
     #TODO better memory management (use inplace)
-    transform(t, src; fit=true)
+    transform(t, src; fit = true)
 end
 
 # ------ SERIALIZATION
@@ -228,6 +228,7 @@ JSON.lower(t::OneHotColumnTransform{T}) where T = OrderedDict("type" => "OneHotC
         "col" => t.col, "vals" => t.vals)
 JSON.lower(t::StandardizeColumnTransform) = OrderedDict("type" => "StandardizeColumnTransform", 
         "col" => t.col, "mu" => t.μ, "sigma" => t.σ)
+JSON.lower(t::ChainColumnTransform) = OrderedDict("type" => "ChainColumnTransform", "transforms" => t.transforms)
 JSON.lower(t::ParallelColumnTransform) = OrderedDict("type" => "ParallelColumnTransform", "transforms" => t.transforms)
 
 function deserializetype(t::Type, params::OrderedDict)
@@ -236,9 +237,12 @@ end
 
 deserializetype(t::Type{Column{T}}, params::OrderedDict) where T = t(Symbol(params["name"]))
 
-deserializetype(t::Type{OneHotColumnTransform{T}}, params::OrderedDict) where T =  t(deserialize(params["col"]), String.(params["vals"]))
+deserializetype(t::Type{OneHotColumnTransform{T}}, params::OrderedDict) where T =  
+    t(deserialize(params["col"]), String.(params["vals"]))
 
 deserializetype(t::Type{ParallelColumnTransform}, params::OrderedDict) = t(deserialize.(values(params["transforms"])))
+
+deserializetype(t::Type{ChainColumnTransform}, params::OrderedDict) = t(deserialize.(values(params["transforms"])))
 
 function deserialize(d)
     (d isa OrderedDict && "type" ∈ keys(d)) || return d
@@ -249,10 +253,12 @@ function deserialize(d)
 end
 
 function dump_transform(file, transform::ColumnTransform)
-    open(f->write(f, JSON.json(transform, 3)), file, "w")
+    str = JSON.json(transform, 3)
+    write(file, str)
 end
 
-function load_transform(file)::ColumnTransform
-    d = open(f->JSON.parse(f, dicttype = OrderedDict), file, "r")
+function load_transform(file)
+    str = read(file, String)
+    d = JSON.parse(str, dicttype = OrderedDict)
     deserialize(d)
 end
