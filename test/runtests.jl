@@ -2,5 +2,5 @@ using FluxGoodies
 using Test
 
 @testset "FluxGoodies.jl" begin
-    # Write your own tests here.
+    include("datasets/transform.jl")
 end
