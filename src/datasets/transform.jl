@@ -21,6 +21,10 @@ abstract type ColumnTransform end
 
 inplace(t::ColumnTransform) = false
 
+srcncols(t::ColumnTransform) = length(srccols(t))
+
+dstncols(t::ColumnTransform) = length(dstcols(t))
+
 struct CopyColumnTransform <: ColumnTransform
     col::Column
 end
@@ -30,7 +34,15 @@ function transform!(t::CopyColumnTransform, src::Tabular, dst::Tabular; opts...)
 end
 
 function invtransform!(t::CopyColumnTransform, src::Tabular, dst::Tabular; opts...)
-    view(src, :, 1) .= view(dst, :, 1)
+    try
+        view(src, :, 1) .= view(dst, :, 1)
+    catch ex
+        if ex isa InexactError
+            view(src, :, 1) .= round.(view(dst, :, 1))
+        else
+            rethrow(ex)
+        end
+    end
 end
 
 srccols(t::CopyColumnTransform) = [t.col]
@@ -94,12 +106,12 @@ end
 
 srccols(t::OneHotColumnTransform) = [t.col]
 
-dstcols(t::OneHotColumnTransform) = [Column{Int}(String(name(t.col)) * "_" * String(k) |> Symbol) for (k, v) in t.table]
+dstcols(t::OneHotColumnTransform) = [Column{Int}(string(name(t.col)) * "_" * string(k) |> Symbol) for (k, v) in t.table]
 
 # TODO remove S and D types, src and dst must be Matrices/Tables i.e., 2D
 function transform!(t::OneHotColumnTransform, src::Tabular, dst::Tabular; opts...)
     if get(opts, :fit, false)
-        temp = NominalToIntTransform(t.col, view(src, :, 1))
+        temp = OneHotColumnTransform(t.col, view(src, :, 1))
         merge!(t.table, temp.table)
     end
     for i in 1:size(dst, 2)
@@ -118,14 +130,14 @@ function invtransform!(t::OneHotColumnTransform, src::Tabular, dst::Tabular; opt
     end
 end
 
-mutable struct StandardizeColumnTransform{T <: Real} <: ColumnTransform
+mutable struct StandardizeColumnTransform{T <: Real, U <: AbstractFloat} <: ColumnTransform
     col::Column{T}
-    μ::Union{T,Nothing}
-    σ::Union{T,Nothing}
+    μ::U
+    σ::U
 end
 
 function StandardizeColumnTransform(col::Column{T}) where T <: Real
-    StandardizeColumnTransform(col, nothing, nothing)   
+    StandardizeColumnTransform(col, NaN, NaN)   
 end
 
 function StandardizeColumnTransform(col::Column{T}, data::AbstractVector{U}) where T <: Real where U <: Real
@@ -138,7 +150,7 @@ end
 
 srccols(t::StandardizeColumnTransform) = [t.col]
 
-dstcols(t::StandardizeColumnTransform) = [t.col]
+dstcols(t::StandardizeColumnTransform) = [Column{typeof(t.μ)}(name(t.col))]
 
 inplace(t::StandardizeColumnTransform) = true
 
@@ -147,12 +159,21 @@ function transform!(t::StandardizeColumnTransform, src::Tabular, dst::Tabular; o
         temp = StandardizeColumnTransform(t.col, view(src, :, 1))
         t.μ, t.σ = temp.μ, temp.σ
     end
-    (t.μ == nothing || t.σ == nothing) && error("StandardizeColumnTransform not fit!")
+    (isnan(t.μ) || isnan(t.σ)) && error("StandardizeColumnTransform not fit!")
     view(dst, :, 1) .= (view(src, :, 1) .- t.μ) ./ t.σ
 end
 
 function invtransform!(t::StandardizeColumnTransform, src::Tabular, dst::Tabular; opts...)
-    view(src, :, 1) .= (t.σ .* view(dst, :, 1)) .+ t.μ
+    #TODO code similar to CopyColumnTransform
+    try
+        view(src, :, 1) .= (t.σ .* view(dst, :, 1)) .+ t.μ
+    catch ex
+        if ex isa InexactError
+            view(src, :, 1) .= round.((t.σ .* view(dst, :, 1)) .+ t.μ)
+        else
+            rethrow(ex)
+        end
+    end
 end
 
 struct ParallelColumnTransform <: ColumnTransform
@@ -170,7 +191,7 @@ function transform!(t::ParallelColumnTransform,
         dst::Tabular; opts...)
     offset = 1
     for (i, trn) in enumerate(t.transforms)
-        ncols = length(dstcols(trn))
+        ncols = dstncols(trn)
         vsrc = view(src, :, i:i)
         vdst = view(dst, :, offset:offset + ncols - 1)
         transform!(trn, vsrc, vdst; opts...)
@@ -181,7 +202,7 @@ end
 function invtransform!(t::ParallelColumnTransform, src::Tabular, dst::Tabular; opts...)
     offset = 1
     for (i, trn) in enumerate(t.transforms)
-        ncols = length(dstcols(trn))
+        ncols = dstncols(trn)
         vsrc = view(src, :, i:i)
         vdst = view(dst, :, offset:offset + ncols - 1)
         invtransform!(trn, vsrc, vdst; opts...)
@@ -195,7 +216,7 @@ end
 
 srccols(t::ChainColumnTransform) = srccols(t.transforms[1])
 
-dstcols(t::ChainColumnTransform) = srccols(t.transforms[end])
+dstcols(t::ChainColumnTransform) = dstcols(t.transforms[end])
 
 inplace(t::ChainColumnTransform) = all(inplace.(t.transforms))
 
@@ -227,7 +248,7 @@ function allocate(::Type{<:AbstractDataFrame}, t::ColumnTransform, len::Int, fco
     DataFrame(ctype.(cols), name.(cols), len)
 end
 
-function nominal(src::AbstractDataFrame, maxunique::Union{Int,Nothing}=nothing)
+function nominal(src::AbstractDataFrame, maxunique::Union{Int,Nothing} = nothing)
     cols = columns(src)
     ret = OrderedSet{Column}()
     for col in cols
@@ -245,7 +266,7 @@ function nominal(src::AbstractDataFrame, maxunique::Union{Int,Nothing}=nothing)
     ret
 end
 
-function transform_to_numerical(src::AbstractDataFrame, onehot=true, nominal=nothing)
+function transform_to_numerical(src::AbstractDataFrame, onehot = true, nominal = nothing)
     if nominal == nothing
         nominal = FluxGoodies.nominal(src)
     end
@@ -308,19 +329,30 @@ end
 
 deserializetype(t::Type{Column{T}}, params::OrderedDict) where T = t(Symbol(params["name"]))
 
+# Dict (and probably other collection) types are not stored in JSON, this helps conversion according to col
+converthelper(t::Type, v) = v
+converthelper(t::Type{T}, v) where T <: AbstractString = string(v)
+converthelper(t::Type{T}, v::S) where {T <: Number,S <: AbstractString} = parse(T, v)
+
 function deserializetype(t::Type{NominalToIntTransform}, params::OrderedDict) 
     col = deserialize(params["col"])
-    t(col, OrderedDict{ctype(col),Int}(params["table"]))
+    table = OrderedDict{ctype(col),Int}(converthelper(ctype(col), k) => v for (k, v) in params["table"])
+    t(col, table)
 end
 
 function deserializetype(t::Type{OneHotColumnTransform}, params::OrderedDict) 
     col = deserialize(params["col"])
-    t(col, OrderedDict{ctype(col),Int}(params["table"]))
+    table = OrderedDict{ctype(col),Int}(converthelper(ctype(col), k) => v for (k, v) in params["table"])
+    t(col, table)
 end
 
-deserializetype(t::Type{ParallelColumnTransform}, params::OrderedDict) = t(deserialize.(values(params["transforms"])))
-
+function deserializetype(t::Type{StandardizeColumnTransform}, params::OrderedDict)
+    col, μ, σ = deserialize(params["col"]), params["mu"], params["sigma"]
+    t(col, μ == nothing ? NaN : μ, σ == nothing ? NaN : σ)
+end
 deserializetype(t::Type{ChainColumnTransform}, params::OrderedDict) = t(deserialize.(values(params["transforms"])))
+
+deserializetype(t::Type{ParallelColumnTransform}, params::OrderedDict) = t(deserialize.(values(params["transforms"])))
 
 function deserialize(d)
     (d isa OrderedDict && "type" ∈ keys(d)) || return d

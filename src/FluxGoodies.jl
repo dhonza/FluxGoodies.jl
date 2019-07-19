@@ -15,7 +15,7 @@ include("datasets/transform.jl")
 export Column, ColumnTransform, CopyColumnTransform, 
     NominalToIntTransform, OneHotColumnTransform, StandardizeColumnTransform, 
     ParallelColumnTransform, ChainColumnTransform
-export srccols, dstcols, transform!, invtransform!, transform, invtransform, allocate, fit! 
+export srccols, dstcols, srcncols, dstncols, transform!, invtransform!, transform, invtransform, allocate, fit! 
 export nominal, transform_to_numerical
 export dump_transform, load_transform
 

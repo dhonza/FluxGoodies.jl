@@ -5,19 +5,26 @@ using Random
 function build_trans()
     Random.seed!(0)
     n = 20000
-    df = DataFrame([10 * (randn(n) .- 5), rand(["X", "Y", "Z"], n), rand(["M", "N", "O"], n)], [:A, :B, :C])
+    df = DataFrame([10 * (randn(n) .- 5), rand(["X", "Y", "Z"], n), 
+        rand(11:15, n), rand(1:100, n), rand(1:100, n)], [:A, :B, :C, :D, :E])
     trans = ChainColumnTransform([
         ParallelColumnTransform([
                 CopyColumnTransform(Column{Float64}(:A)),
                 NominalToIntTransform(Column{String}(:B), df.B),
-                OneHotColumnTransform(Column{String}(:C), df.C)
+                OneHotColumnTransform(Column{Int}(:C), df.C),
+                CopyColumnTransform(Column{Int}(:D)),
+                CopyColumnTransform(Column{Int}(:E))
                 ]), 
         ParallelColumnTransform([
                 StandardizeColumnTransform(Column{Float64}(:A)),
                 CopyColumnTransform(Column{Int}(:B)),
                 StandardizeColumnTransform(Column{Float64}(:C_M)),
                 StandardizeColumnTransform(Column{Float64}(:C_N)),
-                StandardizeColumnTransform(Column{Float64}(:C_O))
+                StandardizeColumnTransform(Column{Float64}(:C_O)),
+                StandardizeColumnTransform(Column{Float64}(:C_P)),
+                StandardizeColumnTransform(Column{Float64}(:C_Q)),
+                StandardizeColumnTransform(Column{Float64}(:D)),
+                StandardizeColumnTransform(Column{Int}(:E))
                 ])
     ])
     trans, df
