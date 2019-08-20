@@ -1,104 +1,88 @@
 using DataFrames
-using FluxGoodies
+using DataStructures: OrderedDict
+using JSON
 using Random
 
-function build_trans()
+function generate_data1()
     Random.seed!(0)
-    n = 20000
-    df = DataFrame([10 * (randn(n) .- 5), rand(["X", "Y", "Z"], n), 
-        rand(11:15, n), rand(1:100, n), rand(1:100, n)], [:A, :B, :C, :D, :E])
-    trans = ChainColumnTransform([
-        ParallelColumnTransform([
-                CopyColumnTransform(Column{Float64}(:A)),
-                NominalToIntTransform(Column{String}(:B), df.B),
-                OneHotColumnTransform(Column{Int}(:C), df.C),
-                CopyColumnTransform(Column{Int}(:D)),
-                CopyColumnTransform(Column{Int}(:E))
-                ]), 
-        ParallelColumnTransform([
-                StandardizeColumnTransform(Column{Float64}(:A)),
-                CopyColumnTransform(Column{Int}(:B)),
-                StandardizeColumnTransform(Column{Float64}(:C_M)),
-                StandardizeColumnTransform(Column{Float64}(:C_N)),
-                StandardizeColumnTransform(Column{Float64}(:C_O)),
-                StandardizeColumnTransform(Column{Float64}(:C_P)),
-                StandardizeColumnTransform(Column{Float64}(:C_Q)),
-                StandardizeColumnTransform(Column{Float64}(:D)),
-                StandardizeColumnTransform(Column{Int}(:E))
-                ])
-    ])
-    trans, df
+    n = 10
+    df = DataFrame([rand(1:10, n), 0.5 .+ randn(n), 10 .+ 3randn(n), rand(["X", "Y", "Z"], n), rand(Int8[0,1], n), zeros(Bool, n)], [:A1, :A2, :B, :C, :Da, :D2])
+    df.D2 .= 1 .- df.Da
+    df
 end
 
-@testset "transform and invtransform" begin
-    trans, df = build_trans()
-    fit!(trans, df)
-    df2 = transform(trans, df)
-    df3 = invtransform(trans, df2)
-    @test df.A ≈ df3.A
-    @test df.B == df3.B
-    @test df.C == df3.C
+function transform_data1(X, sid=:default)
+    dsrc = datasource(X; sid=sid)
+    re = replacevals(:C => dsrc, "X" => "x", "Z" => "z")
+    oh = onehot(:C => re)
+    re2 = replacevals(:C_Y => oh, false => "no", true => "yes")
+    oc = onecold([:Da => dsrc, :D2 => dsrc], :D, OrderedDict(:Da => "a", :D2 => 2))
+    sd = standardize(:A1 => dsrc)
+    sd2 = standardize(:B => dsrc)
+    sd3 = standardize(:C_z => oh)
+    ddst = mergecols(:A1 => sd, :A2 => dsrc, :B => sd2, :C_Y => re2, :C_z => sd3, :C_x => oh, :D => oc)
+    dsrc, ddst
 end
 
-@testset "dump_transform and load_transform" begin
-    trans, df = build_trans()
-    path, io = mktemp()
-    path2, io2 = mktemp()
-    try
-        dump_transform(io, trans)
-        flush(io)
-        trans2 = load_transform(path)
-        dump_transform(io2, trans2)
-        flush(io2)
-        @test read(path, String) == read(path2, String)
-    finally
-        close(io)
-        close(io2)
-        rm(path)
-        rm(path2)
-    end
+function generate_data2()
+    Random.seed!(0)
+    n = 10
+    DataFrame([rand(0:100, n), rand(["M", "F"], n)], [:O, :S])
 end
 
-@testset "transform_to_numerical" begin
-    @testset "DataFrame to DataFrame" begin
-        srcdf = DataFrame([[1,2,3], ["X", "Y", "Z"]], [:A, :B])
-        trans = transform_to_numerical(srcdf)
-        dstdf = transform(trans, srcdf, DataFrame)
-        @test dstdf == DataFrame([[1,2,3], [1, 0, 0], [0, 1, 0], [0, 0, 1]], [:A, :B_X, :B_Y, :B_Z])
-        dstdf[1, :A] = 5
-        dstdf[2, :B_X] = 1.0
-        dstdf[2, :B_Y] = 0.0
-        invtransform!(trans, srcdf, dstdf)
-        @test srcdf == DataFrame([[5,2,3], ["X", "X", "Z"]], [:A, :B])
+@testset "transform and inverse" begin
+    X = generate_data1()
+    dsrc, ddst = transform_data1(X, :sid1)
+    smap = Dict(:sid1 => X)
+    fit!(ddst, smap)
 
-        srcdf = DataFrame([[1,2,3], ["X", "Y", "Z"]], [:A, :B])
-        trans = transform_to_numerical(srcdf, false)
-        dstdf = transform(trans, srcdf, DataFrame)
-        @test dstdf == DataFrame([[1,2,3], [1,2,3]], [:A, :B])
-        dstdf[1, :A] = 5
-        dstdf[2, :B] = 1
-        invtransform!(trans, srcdf, dstdf)
-        @test srcdf == DataFrame([[5,2,3], ["X", "X", "Z"]], [:A, :B])
-    end
+    Y = transform(ddst, smap, DataFrame)
+    T = DataFrame(
+        A1 = [-1.1423471897815947, -0.5565281180987257, 1.4938386327913158, 0.32220048942557783, -1.1423471897815947, -1.1423471897815947, -0.2636185822572912, 1.2009290969498814, 0.9080195611084468, 0.32220048942557783],
+        A2 = [-1.1072563241277753, -1.9807927306599402, 2.7762328327845243, 0.7196934675425409, 0.3828624692670648, -0.1012535941853836, 1.6422764389413194, 0.41138368179952706, 0.7794662520898984, 0.6114216780915173],
+        B = [-1.0510047730459515, 0.28255507796868556, 0.004359925255237256, -1.700136355232938, 1.8049184082894767, 0.17779513965723276, 0.46682135785382906, -0.9522129757959658, 0.6311744633370341, 0.33572973171335546],
+        C_Y = ["no", "no", "no", "no", "yes", "no", "yes", "no", "no", "no"],
+        C_z = [1.1618950038622249, -0.7745966692414833, -0.7745966692414833, 1.1618950038622249, -0.7745966692414833, 1.1618950038622249, -0.7745966692414833, 1.1618950038622249, -0.7745966692414833, -0.7745966692414833],
+        C_x = Bool[false, true, true, false, false, false, false, false, true, true],
+        D = Any["a", "a", "a", "a", 2, "a", "a", "a", "a", "a"]
+    )
+    @test Y ≈ T
 
-    @testset "DataFrame to Matrix" begin
-        srcdf = DataFrame([[1,2,3], ["X", "Y", "Z"]], [:A, :B])
-        trans = transform_to_numerical(srcdf)
-        dstdf = transform(trans, srcdf, Matrix{Float64})
-        @test dstdf == [1.0 1 0 0; 2 0 1 0; 3 0 0 1]
-        dstdf[1, 1] = 5
-        dstdf[2, 2] = 1.0
-        dstdf[2, 3] = 0.0
-        invtransform!(trans, srcdf, dstdf)
-        @test srcdf == DataFrame([[5,2,3], ["X", "X", "Z"]], [:A, :B])
+    smap2 = Dict(:sid2 => Y)
+    dsrc2 = datasource(Y; sid=:sid2)
+    ddst2 = invert(ddst, dsrc2)
+    Xt = transform(ddst2, smap2, DataFrame)
+    @test X ≈ Xt
 
-        srcdf = DataFrame([[1,2,3], ["X", "Y", "Z"]], [:A, :B])
-        trans = transform_to_numerical(srcdf, false)
-        dstdf = transform(trans, srcdf, Matrix{Float64})
-        @test dstdf == [1.0 1.0; 2.0 2.0; 3.0 3.0]
-        dstdf[1, 1] = 5
-        dstdf[2, 2] = 1.0
-        invtransform!(trans, srcdf, dstdf)
-        @test srcdf == DataFrame([[5,2,3], ["X", "X", "Z"]], [:A, :B])
-    end
+    @test dsrc == getdatasource(ddst)
+end
+
+@testset "tonumerical" begin
+    X = generate_data1()
+    ddst = tonumerical(X)
+    fit!(ddst, X)
+    Ym = transform(ddst, X, Matrix{Float64})
+    dsrcm = datasource(Ym, outids(ddst))
+    ddstm = invert(ddst, dsrcm)
+    Xtm = transform(ddstm, Ym, DataFrame)
+    @test X ≈ Xtm
+
+    Xtm2 = invtransform(ddst, Ym, DataFrame)
+    @test X ≈ Xtm2
+end
+
+@testset "serialization" begin
+    X = generate_data1()
+    dsrc, ddst = transform_data1(X, :sid1)
+    smap = Dict(:sid1 => X)
+    fit!(ddst, smap)
+
+    str = JSON.json(ddst, 3)
+    dict = JSON.parse(str, dicttype = OrderedDict)
+    ddst2 = deserialize(dict)
+
+    Y = transform(ddst, smap, DataFrame)
+    Y2 = transform(ddst2, smap, DataFrame)
+
+    @test Y ≈ Y2
 end

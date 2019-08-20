@@ -7,7 +7,7 @@ end
 @Flux.treelike MLP
   
 function MLP(inopts::Int, layeropts::Union{Int,Pair{Int}}...; activation = relu, outactivation = nothing)
-    outactivation = outactivation == nothing ? activation : outactivation
+    outactivation = outactivation === nothing ? activation : outactivation
     
     function extract_layeropts(l, i)
         act = i < length(layeropts) ? activation : outactivation

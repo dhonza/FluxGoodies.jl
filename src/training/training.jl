@@ -43,22 +43,26 @@ _update_params_full!(pscb, xs; kwargs...) = _update_params_full!([pscb], xs; kwa
 function trainepochs!(loss, ps, data, opt;
     epochs = 1, 
     pscb = ParamsIdentity(), 
-    epochcb = (args...;kwargs...)->(), 
-    batchcb = (args...;kwargs...)->())
+    epochcb = nothing, 
+    batchcb = nothing)
+
+    isnothing(epochcb) || epochcb(epoch = 0, epoch_start_time = time(), ps = ps)
 
     for e in 1:epochs
         epoch_start_time = time()
+
+        epochdata = data isa Function ? data(e) : data
     
-        for (b, d) in enumerate(data)
+        for (b, d) in enumerate(epochdata)
             try
                 gs = gradient(ps) do
                     loss(d...)
                 end
                 # _update_params_full!(pscb, ps, epoch = e, batch = b)
-                batchcb(ps, epoch = e, batch = b, batch_size = size(d[1])[end])
+                isnothing(batchcb) || batchcb(ps, epoch = e, batch = b, batch_size = size(d[1])[end])
                 update!(opt, ps, gs)
             catch ex
-                if ex isa Flux.Optmise.StopException
+                if ex isa Flux.Optimise.StopException
                     break
                 else
                     rethrow(ex)
@@ -67,7 +71,7 @@ function trainepochs!(loss, ps, data, opt;
         end 
     
         try
-            epochcb(epoch = e, epoch_start_time = epoch_start_time, ps = ps)
+            isnothing(epochcb) || epochcb(epoch = e, epoch_start_time = epoch_start_time, ps = ps)
         catch ex
             if ex isa Flux.Optimise.StopException
                 break
