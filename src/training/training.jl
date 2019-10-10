@@ -1,5 +1,10 @@
+module Training
+
+export trainepochs!, StopException
+
 using Flux
 import Flux.Tracker: Params, gradient, data, update!
+import MLDataUtils: getobs
 
 function _update_params_full!(pscb::AbstractArray, xs; kwargs...)
   #  @show pscb, kwargs
@@ -40,38 +45,25 @@ _update_params_full!(pscb, xs; kwargs...) = _update_params_full!([pscb], xs; kwa
     # throw(StopException())
 # end
 
-function trainepochs!(loss, ps, data, opt;
-    epochs = 1, 
+function trainepochs!(loss, ps, data, nbatches, opt;
     pscb = ParamsIdentity(), 
     epochcb = nothing, 
     batchcb = nothing)
 
-    isnothing(epochcb) || epochcb(epoch = 0, epoch_start_time = time(), ps = ps)
-
-    for e in 1:epochs
-        epoch_start_time = time()
-
-        epochdata = data isa Function ? data(e) : data
-    
-        for (b, d) in enumerate(epochdata)
-            try
-                gs = gradient(ps) do
-                    loss(d...)
-                end
-                # _update_params_full!(pscb, ps, epoch = e, batch = b)
-                isnothing(batchcb) || batchcb(ps, epoch = e, batch = b, batch_size = size(d[1])[end])
-                update!(opt, ps, gs)
-            catch ex
-                if ex isa Flux.Optimise.StopException
-                    break
-                else
-                    rethrow(ex)
-                end
-            end        
-        end 
-    
+    epoch = 0
+    isnothing(epochcb) || epochcb(epoch = epoch, epoch_start_time = time(), ps = ps)
+    epoch_start_time = time()
+    for (b, s) in enumerate(data)
+        batch = (b-1) % nbatches + 1
+        # @show batch
+        # s = getobs(s)
+        # @show typeof.(s)
         try
-            isnothing(epochcb) || epochcb(epoch = e, epoch_start_time = epoch_start_time, ps = ps)
+            gs = gradient(ps) do
+                loss(s...)
+            end
+            isnothing(batchcb) || batchcb(ps, epoch = epoch, batch = batch, batch_size = size(samples[1])[end])
+            update!(opt, ps, gs)
         catch ex
             if ex isa Flux.Optimise.StopException
                 break
@@ -79,8 +71,20 @@ function trainepochs!(loss, ps, data, opt;
                 rethrow(ex)
             end
         end
-    
-    end
+        if  batch == nbatches
+            epoch += 1
+            try
+                isnothing(epochcb) || epochcb(epoch = epoch, epoch_start_time = epoch_start_time, ps = ps)
+            catch ex
+                if ex isa Flux.Optimise.StopException
+                    break
+                else
+                    rethrow(ex)
+                end
+            end
+            epoch_start_time = time()
+        end
+    end     
 end
 
 
@@ -147,4 +151,6 @@ function apply!(o::ClipGradientNorm, xs; kwargs...)
   #    @show "AFT", collect(flatten((x.grad for x in xs))) |> norm, clip_coef
     end
     xs
+end
+
 end

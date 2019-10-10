@@ -1,8 +1,7 @@
 # FluxGoodies.jl
 
-```@index
+```@meta
+DocTestSetup = :(using FluxGoodies.Architectures: MLP)
 ```
 
-```@autodocs
-Modules = [FluxGoodies]
-```
+FluxGoodies is a library of Machine Learning tools more or less connected to [Flux](https://github.com/FluxML/Flux.jl).

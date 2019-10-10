@@ -1,22 +1,31 @@
 module Datasets
 
-export Dataset, loaddataset, obsparts, colparts, obspartcols, colpartcols, nobs, ncols, tonumerical, buildtransform, transform, invert
+export Dataset, loaddataset, obsparts, colparts, colpartcols, nobs, ncols, tonumerical, buildtransform, transform, invert
 
 using CSV
 using DataFrames
 using DataStructures: counter, DefaultDict, OrderedDict
-import MLDataUtils: shuffleobs, getobs, splitobs, stratifiedobs
-
+import MLDataUtils: shuffleobs, splitobs, stratifiedobs
+import MLDataPattern
+import MLDataPattern: nobs, getobs
 using Random
 using RDatasets
 
 import Base: show
 
 import ..Transforms: tonumerical, ColTrans, toposort, transform, invert, outids
-import ..FluxGoodies: dview, nobs, ncols
+import ..FluxGoodies: dview, ncols
 
 deps(path...) = joinpath(@__DIR__, "deps", path...)
 
+"""
+    Dataset
+
+`Dataset` encapsulates any data partitioned along both observations (e.g. train, validation, test) and 
+columns/features (e.g. inputs, targets).
+
+Each column is identified by a `Symbol` and a description can be included.
+"""
 struct Dataset
     data
     cols::AbstractVector{Symbol}
@@ -31,29 +40,82 @@ struct Dataset
     end
 end
 
-function Dataset(data::AbstractDataFrame, desc, obspartitions, colpartitions=nothing)
+"""
+    Dataset(data::AbstractDataFrame, desc, obspartitions, colpartitions = nothing)
+
+Create a dataset from `data` described by `desc`. Both `obspartitions` and `colpartitions` must be in 
+a format convertible to `OrderedDict{Symbol,Any}`. If no `colpartitions` are given, two partitions are created 
+by default: `:X` which contain all but last column and `:T` containing only the last column.
+"""
+function Dataset(data::AbstractDataFrame, desc, obspartitions, colpartitions = nothing)
     if isnothing(colpartitions)
-        colpartitions = [:X => 1:size(data,2)-1, :T => [size(data,2)]]
+        colpartitions = [:X => 1:size(data, 2) - 1, :T => [size(data, 2)]]
     end
     Dataset(data, names(data), desc, obspartitions, colpartitions)
 end
 
+"""
+    Base.getindex(dataset::Dataset, obspartition = Colon(), colpartition = Colon())
+
+Address the `Dataset` by observation and column partition ids (`Symbol`s). Use `:` to include all partitions.
+"""
 function Base.getindex(dataset::Dataset, obspartition = Colon(), colpartition = Colon())
     o = obspartition isa Colon ? obspartition : dataset.obspartitions[obspartition]
     c = colpartition isa Colon ? colpartition : dataset.colpartitions[colpartition]
     dview(dataset.data, o, c)
 end
 
+"""
+    obsparts(d::Dataset)
+
+Return all observation partition ids.
+"""
 obsparts(d::Dataset) = keys(d.obspartitions)
+
+"""
+    colparts(d::Dataset)
+
+Return all column, i.e., feature partition ids.
+"""
 colparts(d::Dataset) = keys(d.colpartitions)
 
-obspartcols(d::Dataset, p::Symbol) = d.cols[d.obspartitions[p]]
+"""
+    colpartcols(d::Dataset, p::Symbol)
+
+Give all column names associated to the the column partition `p`. 
+"""
 colpartcols(d::Dataset, p::Symbol) = d.cols[d.colpartitions[p]]
 
-nobs(d::Dataset, p::Symbol) = length(d.obspartitions[p])
-nobs(d::Dataset) = sum(nobs(d, p) for p in obsparts(d))
+"""
+    MLDataPattern.nobs(d::Dataset, p::Symbol)
+
+Number of observations in partition `p`.
+"""
+MLDataPattern.nobs(d::Dataset, p::Symbol) = length(d.obspartitions[p])
+
+"""
+    MLDataPattern.nobs(d::Dataset)
+
+A sum observation numbers in all partitions.
+"""
+MLDataPattern.nobs(d::Dataset) = sum(nobs(d, p) for p in obsparts(d))
+
+"""
+    MLDataPattern.ncols(d::Dataset, p::Symbol)
+
+Number of columns in partition `p`.
+"""
 ncols(d::Dataset, p::Symbol) = length(d.colpartitions[p])
+
+"""
+    MLDataPattern.ncols(d::Dataset, p::Symbol)
+
+A sum of column numbers in all partitions.
+"""
 ncols(d::Dataset) = sum(ncols(d, p) for p in colparts(d))
+
+MLDataPattern.nobs(g::GroupedDataFrame{DataFrame}) = length(g)
+MLDataPattern.getobs(g::GroupedDataFrame{DataFrame}, r) = g[r]
 
 function Base.show(io::IO, mime::MIME"text/html", d::Dataset)
     write(io, "<b>Observations:</b><br/>")
@@ -90,7 +152,7 @@ function _load_UCI(uciname, cols, obspartitions, colpartitions; cvsopts...)
         off = 1
         obs = Pair{Symbol,UnitRange{Int}}[]
         for (p, is) in idxs
-            push!(obs,  p => off:off+length(is)-1)
+            push!(obs,  p => off:off + length(is) - 1)
             off += length(is)
         end
         obspartitions = obs
@@ -99,16 +161,23 @@ function _load_UCI(uciname, cols, obspartitions, colpartitions; cvsopts...)
     Dataset(df, desc, obspartitions, colpartitions)
 end
 
+"""
+    loaddataset(name::Symbol)
+
+Load a dataset identified by the `name`.
+
+Available datasets are: `abalone`, `ecoli`, `housing` and `iris`.
+"""
 function loaddataset(name::Symbol)
     eval(Symbol("_load_$(string(name))"))()
 end
 
-function _shufflesplit(df, obsparts::Vector{Symbol}, fractions; seed=1)
+function _shufflesplit(df, obsparts::Vector{Symbol}, fractions; seed = 1)
     Random.seed!(seed)
     Pair.(obsparts, first.(parentindices.(splitobs(shuffleobs(df), fractions))))
 end
 
-function _shufflestratifiedsplit(f, df, obsparts::Vector{Symbol}, fractions; seed=1)
+function _shufflestratifiedsplit(f, df, obsparts::Vector{Symbol}, fractions; seed = 1)
     Random.seed!(seed)
     Pair.(obsparts, first.(parentindices.(stratifiedobs(f, df, fractions))))
 end
@@ -116,20 +185,20 @@ end
 function _load_abalone()
     cols = [:sex, :length, :diameter, :height, :whole_weight, :shucked_weight, :viscera_weight, :shell_weight, :rings]
     _load_UCI("abalone", cols, df->_shufflestratifiedsplit(row->row[:rings], df, [:train, :test], 0.75), 
-                                    [:X => 1:length(cols)-1, :T => [length(cols)]])
+                                    [:X => 1:length(cols) - 1, :T => [length(cols)]])
 end
 
 function _load_ecoli()
     cols = [:sequence_name, :mcg, :gvh, :lip, :chg, :aac, :alm1, :alm2, :class]
     targets = [:class]
     _load_UCI("ecoli", cols, df->_shufflestratifiedsplit(row->row[:class], df, [:train, :test], 0.5), 
-            [:X => 1:length(cols)-1, :T => [length(cols)]]; 
+            [:X => 1:length(cols) - 1, :T => [length(cols)]]; 
             delim = " ", ignorerepeated = true)
 end
 
 function _load_housing()
     cols = [:crim, :zn, :indus, :chas, :nox, :rm, :age, :dis, :rad, :tax, :ptratio, :b, :lstat, :medv]
-    _load_UCI("housing", cols, df->_shufflesplit(df, [:train, :test], 0.8), [:X => 1:length(cols)-1, :T => [length(cols)]]; 
+    _load_UCI("housing", cols, df->_shufflesplit(df, [:train, :test], 0.8), [:X => 1:length(cols) - 1, :T => [length(cols)]]; 
         delim = " ", ignorerepeated = true)
 end
 
@@ -137,7 +206,7 @@ function _load_iris()
     cols = [:sepal_length, :sepal_width,  :petal_length, :petal_width, :class]
     targets = [:class]
     _load_UCI("iris", cols, df->_shufflestratifiedsplit(row->row[:class], df, [:train, :test], 0.8), 
-            [:X => 1:length(cols)-1, :T => [length(cols)]]; limit = 150)
+            [:X => 1:length(cols) - 1, :T => [length(cols)]]; limit = 150)
 end
 
 
@@ -148,14 +217,14 @@ struct DatasetTransform
     trns::OrderedDict{Symbol,ColTrans}
 end
 
-function tonumerical(dataset::Dataset,  obspart::Union{Symbol,Colon}, colpartopts::Pair{Symbol, <:AbstractDict}...)
+function tonumerical(dataset::Dataset,  obspart::Union{Symbol,Colon}, colpartopts::Pair{Symbol,<:AbstractDict}...)
     #TODO remove use buildtransform instead?
     cpsetup = DefaultDict{Symbol,Any,Any}(Dict(:nominal => nothing, :standardize => true))
-    foreach(e -> (cpsetup[first(e)] = last(e)), colpartopts)
+    foreach(e->(cpsetup[first(e)] = last(e)), colpartopts)
     DatasetTransform(OrderedDict(cp => tonumerical(dataset[obspart,cp]; cpsetup[cp]...) for cp in colparts(dataset)))
 end
 
-function buildtransform(dataset::Dataset, obspart::Union{Symbol,Colon}, colpartfuncs::Pair{Symbol, <:Function}...)
+function buildtransform(dataset::Dataset, obspart::Union{Symbol,Colon}, colpartfuncs::Pair{Symbol,<:Function}...)
     cpfs = OrderedDict(colpartfuncs)
     DatasetTransform(OrderedDict(cp => cpfs[cp](dataset[obspart,cp]) for cp in keys(cpfs)))
 end
@@ -170,14 +239,14 @@ function _transformhelper(dt::DatasetTransform)
     off = 1
     for cp in keys(dt.trns)
         cnames = outids(dt.trns[cp])
-        colpartitions[cp] = off:off+length(cnames)-1
+        colpartitions[cp] = off:off + length(cnames) - 1
         off += length(cnames)
         cols = [cols..., cnames...]
     end
     cols, colpartitions
 end
 
-function transform(d::Dataset, dt::DatasetTransform, type::Type{DataFrame}; sid = :default)
+function transform(d::Dataset, dt::DatasetTransform, type::Type{<:AbstractDataFrame}; sid = :default)
     data = hcat([transform(dt.trns[col], Dict(sid => d[:,col]), type) for col in keys(dt.trns)]...)
     cols, colpartitions = _transformhelper(dt)
     Dataset(data, d.desc, copy(d.obspartitions), colpartitions)
