@@ -12,12 +12,8 @@ makedocs(;
         "Home" => "index.md",
         "API" => [
             "Architectures" => "architectures.md",
-            "Datasets" => "datasets.md",
-            "Evaluation" => "evaluation.md",
             "Losses" => "losses.md",
             "Training" => "training.md",
-            "Transforms" => "transforms.md",
-            "Utils" => "utils.md",
         ]
     ],
     repo="https://github.com/dhonza/FluxGoodies.jl/blob/{commit}{path}#L{line}",
