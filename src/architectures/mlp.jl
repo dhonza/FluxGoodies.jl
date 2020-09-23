@@ -4,7 +4,7 @@ struct MLP
     layers
 end
   
-@Flux.treelike MLP
+@Flux.functor MLP
 
 """
     MLP(inopts::Int, layeropts::Union{Int,Pair{Int}}...; activation = relu, outactivation = nothing)

@@ -3,7 +3,7 @@ module Training
 export trainepochs!, StopException
 
 using Flux
-import Flux.Tracker: Params, gradient, data, update!
+# import Flux.Tracker: Params, gradient, data, update!
 import MLDataUtils: getobs
 
 function _update_params_full!(pscb::AbstractArray, xs; kwargs...)
@@ -55,9 +55,12 @@ function trainepochs!(loss, ps, data, nbatches, opt;
     epoch_start_time = time()
     for (b, s) in enumerate(data)
         batch = (b-1) % nbatches + 1
+
         # @show batch
         # s = getobs(s)
-        # @show typeof.(s)
+        # @show summary.(s)
+        # @show summary(loss(s...))
+        # @show summary.(ps)
         try
             gs = gradient(ps) do
                 loss(s...)

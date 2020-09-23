@@ -1,6 +1,6 @@
 module Losses
 
-export batchlogitbinarycrossentropy
+export batchlogitbinarycrossentropy, batchmse
 
 include("basic.jl")
 end
